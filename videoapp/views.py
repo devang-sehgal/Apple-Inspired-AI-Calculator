@@ -1,3 +1,4 @@
+import time
 from django.shortcuts import render
 from django.http import StreamingHttpResponse, JsonResponse
 import cv2
@@ -7,11 +8,12 @@ import google.generativeai as genai
 from PIL import Image
 
 # Initialize gemini
-genai.configure(api_key="Enter_Your_Gemini_API_Key")
+genai.configure(api_key="AIzaSyDDvRAzZtfq9qkYjyB4tp1e-GygfqDsFYg")
 model = genai.GenerativeModel('gemini-1.5-flash')
 
 # Initialize the HandDetector class with the given parameters
 detector = HandDetector(staticMode=False, maxHands=1, modelComplexity=0, detectionCon=0.75, minTrackCon=0.75)
+# detector = HandDetector(staticMode=False, maxHands=2, modelComplexity=1, detectionCon=0.75, minTrackCon=0.75)
 
 # Initialize the webcam to capture video
 cap = cv2.VideoCapture(0)
@@ -35,11 +37,14 @@ def weighted_average(current, previous, alpha=0.5):
 
 response_text = None
 
+mutexLock, wait_time = 0, 100
+
 def send_to_ai(model, canvas, fingers):
     global response_text
-    if fingers[4] == 1:
+    if mutexLock == 0:
         image = Image.fromarray(canvas)
-        response = model.generate_content(["solve this math problem", image])
+        response = model.generate_content(["The image you see is a math equation written in very bad handwriting, solve it and calculate the answer. ANSWER FORMAT: 1st Line - only answer, and add a line break; next two lines - approach in plain text.", image])
+        print("Response Text: ", response_text)
         response_text = response.text if response else None
 
 # Initialize variables
@@ -57,6 +62,8 @@ def video_stream():
 
     while True:
         # Capture each frame from the webcam
+        global mutexLock
+        mutexLock = (mutexLock + 1) % wait_time
         success, img = cap.read()
 
         if not success:
@@ -73,11 +80,17 @@ def video_stream():
             lmList, bbox, center, handType, fingers = process_hand(hand)
 
             # Get the positions of the index and middle finger tips
-            index_tip = lmList[8]
-            thumb_tip = lmList[4]
 
+            # get the second and third landmarks of the index finger
+            index_tip = lmList[8]
+            index_x, index_y, z = lmList[8]
+            thumb_x, thumb_y, z2 = lmList[4]
+
+            # print((thumb_x - index_x) ** 2 + (thumb_y - index_y) ** 2)
             # Determine drawing state based on fingers up
-            if fingers[1] == 1 and fingers[2] == 0:  # Only index finger is up
+            # if fingers[1] == 1 and fingers[2] == 0:  # Only index finger is up
+
+            if (thumb_x - index_x) ** 2 + (thumb_y - index_y) ** 2 < 2000:
                 current_pos = np.array([index_tip[0], index_tip[1]])
                 if smooth_points is None:
                     smooth_points = current_pos
@@ -89,18 +102,21 @@ def video_stream():
                     points.append(smoothed_pos)
                 prev_pos = smoothed_pos
                 drawing = True
-            elif fingers[1] == 1 and fingers[2] == 1:  # Both index and middle fingers are up
+            
+            if (thumb_x - index_x) ** 2 + (thumb_y - index_y) ** 2 >= 2000:  # Index finger is up
                 drawing = False
                 prev_pos = None
                 points = []  # Clear points to avoid connection
                 smooth_points = None
-            elif fingers[0] == 1:  # Thumb is up
+
+            if (thumb_x - index_x) ** 2 + (thumb_y - index_y) ** 2 >= 50000:  # Thumb is up
                 canvas = initialize_canvas(img)
                 points = []
                 drawing = False
                 prev_pos = None
                 smooth_points = None
-            elif fingers[4] == 1:
+
+            if fingers[4] == 1:
                 send_to_ai(model, canvas, fingers)
 
         # Draw polyline on the canvas
